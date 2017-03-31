@@ -12,3 +12,7 @@
 #### going further
 
 For more information, please visit [ismm.ircam.fr/riot/](http://ismm.ircam.fr/riot/).
+
+#### credits
+
+This project has been developed by the ISMM team at IRCAM-Centre Pompidou within the CoSiMa project (funded by ANR) and the MusicBricks project funded by the European Union's Horizon 2020 research and innovation programme.
