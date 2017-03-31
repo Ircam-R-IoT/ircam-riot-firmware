@@ -1,7 +1,7 @@
 /* R-IoT :
 
- Current version : 1.6
- 
+ Current version : 1.7
+  
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
  
@@ -13,6 +13,10 @@
  Battery reading in volt = analogRead() / 877.
  
  Rev History :
+ 
+ 1.7 : corrected yaw drift and error + auto calibration for gyro every 5sec if no movement / stable + improved mag calibration
+  
+ 1.6 : added I2C support of the LMS9DS0 for external sensors
  
  1.5 : adding a AP style connection to allow streaming to multiple computers / devices
  
@@ -102,13 +106,14 @@ Word AccelerationX, AccelerationY, AccelerationZ;
 Word GyroscopeX, GyroscopeY, GyroscopeZ;
 Word MagnetometerX, MagnetometerY, MagnetometerZ;
 Word Temperature;
+byte CommunicationMode = SPI_MODE;
+//byte CommunicationMode = I2C_MODE;
 
 short unsigned int AnalogInput1, AnalogInput2;
 
 // Defines whether you want the "raw" value with the stored offset or not
 byte SendCalibrated = true;
-byte SensorOrientation = BOTTOM;  // wifi chip & switches facing up
-//byte SensorOrientation = TOP;  // sensor facing up
+//byte SendCalibrated = false;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Absolute angle (madgwick)
@@ -122,19 +127,35 @@ byte SensorOrientation = BOTTOM;  // wifi chip & switches facing up
 // I haven't noticed any reduction in solution accuracy. This is essentially the I coefficient in a PID control sense; 
 // the bigger the feedback coefficient, the faster the solution converges, usually at the expense of accuracy. 
 // In any case, this is the free parameter in the Madgwick filtering and fusion scheme.
-// Beta is called the rate of convergence of the filter. Higher value lead to a noisy output but fast response.
-// The best is to first set zeta (gyro bias drift) to zero and adjust beta to get the proper convergence behavior,
-// then adjust zeta to a suit the gyro bias drift.
+// Beta is called the rate of convergence of the filter. Higher value lead to a noisy output but fast response
+// If beta = 0.0 => uses gyro only. A very high beta like 2.5 uses almost no gyro and only accel + magneto.
 
-//#define zeta  0.1f // zeta, the other free parameter in the Madgwick scheme usually set to a small or zero value
-#define ZETA_DEFAULT  0.0f
-#define BETA_DEFAULT 0.4f    // Much faster - noisier
+#define BETA_DEFAULT 0.4   // Much faster - noisier
+#define BETA_MAX     2.0
 //#define beta 0.041f    // 10 seconds or more to have the quaternion converge to the right orientation - super smooth
 
-float zeta = ZETA_DEFAULT;
 float beta = BETA_DEFAULT;
+float madgwick_beta_max = BETA_MAX;
+float madgwick_beta_gain = 1.0f;
+float acc_lp_alpha = 0.01;  // 10 ms
+
+int gyroOffsetAutocalTime = 5000; //ms = 1000 samples @5ms
+long gyroOffsetAutocalThreshold = 100; //LSB
+long gyroOffsetAutocalCounter; //internal
+//boolean gyroOffsetAutocalOn = true;
+boolean gyroOffsetAutocalOn = false;
+boolean gyroOffsetCalDone = false;
+long gyroOffsetCalElapsed = 0;
+long gyroOffsetAutocalMin[3];
+long gyroOffsetAutocalMax[3];
+long gyroOffsetAutocalSum[3];
+long magOffsetAutocalMin[3];
+long magOffsetAutocalMax[3];
+long accOffsetAutocalSum[3];
+
 
 float pitch, yaw, roll, heading;
+float Declination = DECLINATION;
 float deltat = 0.005f;        // integration interval for both filter schemes - 5ms by default
 
 int gyro_bias[3] = { 0, 0, 0};
@@ -148,12 +169,11 @@ float mbias[3] = { 0., 0., 0.};
 
 float gRes, aRes, mRes;		// Resolution = Sensor range / 2^15
 float a_x, a_y, a_z, g_x, g_y, g_z, m_x, m_y, m_z; // variables to hold latest sensor data values
+float gyro_norm; // used to tweak Beta
 float mag_nobias[3];
 float mag_cal[3];  // calibrated version of the mag sensor data
 
-float w_bx = 0, w_by = 0, w_bz = 0; // estimate gyroscope biases error
-float b_x = 1, b_z = 0; // reference direction of flux in earth frame
-float SEq_1 = 1.0f, SEq_2 = 0.0f, SEq_3 = 0.0f, SEq_4 = 0.0f; // estimated orientation quaternion elements with initial conditions
+float q1 = 1.0f, q2 = 0.0f, q3 = 0.0f, q4 = 0.0f;	// quaternion of sensor frame relative to auxiliary frame
 
 /////////////////////////////////////////////////////////////////////////////
 // Magnetic Sensors calibration using a rotation / transformation matrix
@@ -262,10 +282,10 @@ void setup() {
   // Must match the init settings of the LSM9DS0
   // Beware, absolute dynamic range of each sensor isn't equivalent.
   // Accelerometers are using the whole dynamic range, gyro / mag aren't
-  gRes = 2000.0 / 28571.4; 	// +- 2000 deg/s
+  gRes = 2000.0 / 32768; 	// +- 2000 deg/s
   aRes = 8.0 / 32768.0;         // +- 8g
-  mRes = 2.0 / 25000.0;         // +- 2 gauss
-
+  mRes = 2.0 / 32768.0;         // +- 2 gauss
+  
   // Starts the file system
   Serial.println("Loading up params");
 
@@ -431,7 +451,7 @@ void loop() {
     if(AcceptOSC)
     {
       // Parses incoming OSC messages
-      digitalWrite(POWER_LED, HIGH);
+      //digitalWrite(POWER_LED, HIGH);
       int packetSize = ConfigPacket.parsePacket();
       if (packetSize)
       {
@@ -502,7 +522,7 @@ void loop() {
 
         }
       }
-      digitalWrite(POWER_LED, LOW);
+      //digitalWrite(POWER_LED, LOW);
     }
 
     if((millis() - ElapsedTime >= SampleRate) && !ConfigurationMode &&
@@ -522,19 +542,10 @@ void loop() {
       if(!SwitchState)
       { 
         ConfigModeCounter++;
-        if(ConfigModeCounter > 1000)
+        if(ConfigModeCounter > 600)
         {
           ConfigModeCounter = 0;
-          if(AcceptOSC)
-          {
-            AcceptOSC = false;
-            Serial.println("Leaving OSC receive mode");
-          }
-          else
-          {
-            AcceptOSC = true;
-            Serial.println("Entering OSC receive mode");
-          }
+          CalibrateAccGyroMag();
         }
       }
       else
@@ -547,19 +558,33 @@ void loop() {
       ReadGyro();
       ReadMagneto();
       ReadTemperature();
-    
+      
+      
+      if((millis() - gyroOffsetCalElapsed > gyroOffsetAutocalTime) && gyroOffsetCalDone)
+      {
+        gyroOffsetCalElapsed = millis();
+        gyroOffsetCalDone = false;
+      }
+      
+      if(!gyroOffsetCalDone && gyroOffsetAutocalOn)
+      {
+        gyroOffsetCalibration();      
+        magOffsetAutocalMax[0] = max(magOffsetAutocalMax[0], MagnetometerX.Value);
+        magOffsetAutocalMax[1] = max(magOffsetAutocalMax[1], MagnetometerY.Value);
+        magOffsetAutocalMax[2] = max(magOffsetAutocalMax[2], MagnetometerZ.Value);
+        magOffsetAutocalMin[0] = min(magOffsetAutocalMin[0], MagnetometerX.Value);
+        magOffsetAutocalMin[1] = min(magOffsetAutocalMin[1], MagnetometerY.Value);
+        magOffsetAutocalMin[2] = min(magOffsetAutocalMin[2], MagnetometerZ.Value);
+        for(int i = 0 ; i < 3 ; i++)
+        {
+           mag_bias[i] = (magOffsetAutocalMax[i] + magOffsetAutocalMin[i]) / 2;
+           mbias[i] = mRes * (float)mag_bias[i];
+        }
+      }
+      
       g_x = (gRes * (float)GyroscopeX.Value) - gbias[0];   // Convert to degrees per seconds, remove gyro biases
       g_y = (gRes * (float)GyroscopeY.Value) - gbias[1];
-      
-      // Small noise gate on the gyro Z to reduce integration drift on YAW
-      // Gyro offset drits with temperature, but it's so far hard to calibrate.
-      // So little static offset is removed to avoid the madgwick algorithm to "think" the 
-      // gyro is actually spinning. The noise gate level should be kept low to keep the
-      // integration working ok and give proper angle after long rotations.
-      if(abs(GyroscopeZ.Value - gyro_bias[2]) < GYRO_NOISEGATE)
-        g_z = 0.0f;
-      else
-        g_z = (gRes * (float)GyroscopeZ.Value) - gbias[2];
+      g_z = (gRes * (float)GyroscopeZ.Value) - gbias[2];
 
       a_x = (aRes * (float)AccelerationX.Value) - abias[0];   // Convert to g's, remove accelerometer biases
       a_y = (aRes * (float)AccelerationY.Value) - abias[1];
@@ -569,15 +594,18 @@ void loop() {
       m_y = (mRes * (float)MagnetometerY.Value) - mbias[1];
       m_z = (mRes * (float)MagnetometerZ.Value) - mbias[2];   
 
+      // compute the squared norm of the gyro data => rough estimation of the movement
+      gyro_norm = g_x * g_x + g_y * g_y + g_z * g_z;
+      //beta = madgwick_beta_max * (1 - min(max(madgwick_beta_gain * gyro_norm,0),1));
+      // Less drastic version ramping between beta max and close to zero (but never as gyros are always non null)
+      //beta = madgwick_beta_max * (1 - madgwick_beta_gain * gyro_norm);
+
       // Mag calibration thru transformation matrix
       mag_nobias[0] = m_x;
       mag_nobias[1] = m_y;
       mag_nobias[2] = m_z;
       CalibrateMag(mag_cal, mag_nobias);
-  
-      // OLD with non calibrated MAG - NOT USED ANYMORE
-      //MadgwickQuaternionUpdate(-a_x, -a_y, -a_z, g_x*PI/180.0f, g_y*PI/180.0f, g_z*PI/180.0f, -m_x, -m_y, m_z);
-    
+ 
       ////////////////////////////////////////////////////////////////////////////////////
       // Note regarding the sensor orientation & angles :
       // We alter the sensor sign in order to "redefine gravity" and axis so that it behaves
@@ -586,51 +614,36 @@ void loop() {
       // signing must be used. We therefore do a double signe inversion when the sensor 
       // is on the bottom. [looks crappy but works and for good reasons]
     
-      // Default Orientation, sensor on top (board reversed)
-      if(SensorOrientation == TOP)
-      {
-        MadgwickQuaternionUpdate(a_x, a_y, a_z, g_x*PI/180.0f, g_y*PI/180.0f, g_z*PI/180.0f, mag_cal[0], mag_cal[1], -mag_cal[2]);
-        yaw   = atan2(2.0f * (SEq_2 * SEq_3 + SEq_1 * SEq_4), SEq_1 * SEq_1 + SEq_2 * SEq_2 - SEq_3 * SEq_3 - SEq_4 * SEq_4);   
-        pitch = -asin(2.0f * ((SEq_2 * SEq_4) - (SEq_1 * SEq_3)));
-        roll  = atan2(2.0f * (SEq_1 * SEq_2 + SEq_3 * SEq_4), (SEq_1 * SEq_1) - (SEq_2 * SEq_2) - (SEq_3 * SEq_3) + (SEq_4 * SEq_4));
-      }
-      else  // WiFi chip and switches facing up
-      {
-        MadgwickQuaternionUpdate(-a_x, -a_y, -a_z, g_x*PI/180.0f, g_y*PI/180.0f, g_z*PI/180.0f, -mag_cal[0], -mag_cal[1], mag_cal[2]);     
-        yaw   = atan2(2.0f * (SEq_2 * SEq_3 + SEq_1 * SEq_4), SEq_1 * SEq_1 + SEq_2 * SEq_2 - SEq_3 * SEq_3 - SEq_4 * SEq_4);   
-        // Small trigo cheat as the module is upside down so north is south and conversely, and axis orientation are swaped.
-        yaw = (yaw - PI);
-        if(yaw < -PI)
-          yaw += 2 * PI;        
-        pitch = asin(2.0f * ((SEq_2 * SEq_4) - (SEq_1 * SEq_3))); // pitch is inverted
-        roll  = atan2(2.0f * (SEq_1 * SEq_2 + SEq_3 * SEq_4), (SEq_1 * SEq_1) - (SEq_2 * SEq_2) - (SEq_3 * SEq_3) + (SEq_4 * SEq_4));
-      }
-      
+      MadgwickAHRSupdate(a_x, a_y, a_z, g_x*PI/180.0f, g_y*PI/180.0f, g_z*PI/180.0f, mag_cal[0], mag_cal[1], -mag_cal[2]);   
+      yaw   = atan2(2.0f * (q2 * q3 + q1 * q4), q1*q1 + q2*q2 - q3*q3 - q4*q4);   
+      pitch = -asin(2.0f * ((q2*q4) - (q1*q3)));
+      roll  = atan2(2.0f * (q1*q2 + q3*q4), (q1*q1) - (q2*q2) - (q3*q3) + (q4*q4));
+    
       // Compute heading *BEFORE* the final export of yaw pitch roll to save float computation of deg2rad / rad2deg
-      ComputeHeading();
+      ComputeHeading(); 
       
       /////////////////////////////////////////////////////////////////////////////////
       // Degree per second conversion and declination correction 
       pitch *= 180.0f / PI;
       yaw   *= 180.0f / PI; 
-      yaw   -= DECLINATION; 
+      yaw   -= Declination; 
       roll  *= 180.0f / PI;
 
        // Quaternion export
       /*Serial.print("\nQuats = ");
-       Serial.println(SEq_1);
-       Serial.println(SEq_2);
-       Serial.println(SEq_3);
-       Serial.println(SEq_4);*/
+       Serial.println(q1);
+       Serial.println(q2);
+       Serial.println(q3);
+       Serial.println(q4);*/
 
       char *pData = Quaternions.pData;
-      FloatToBigEndian(pData, &SEq_1);
+      FloatToBigEndian(pData, &q1);
       pData += sizeof(float);
-      FloatToBigEndian(pData, &SEq_2);
+      FloatToBigEndian(pData, &q2);
       pData += sizeof(float);
-      FloatToBigEndian(pData, &SEq_3);
+      FloatToBigEndian(pData, &q3);
       pData += sizeof(float);
-      FloatToBigEndian(pData, &SEq_4);
+      FloatToBigEndian(pData, &q4);
       pData += sizeof(float);
 
       pData = EulerAngles.pData;
@@ -1032,10 +1045,6 @@ void SendConfigWebPage(void)
   client.println(beta);
   client.println("</td></tr><br/>");
   
-  client.println("<tr><td>Zeta = \0");
-  client.println(zeta);
-  client.println("</td></tr><br/>");
-  
   sprintf(StringBuffer, "<tr><td>Firmware: %s</td></tr></table><br/><br/>\0", VERSION_DATE);
   client.println(StringBuffer);
   client.println("<table><tr><td><strong>Network Configuration</strong></td></tr></table>");
@@ -1270,159 +1279,103 @@ void printCurrentNet() {
 // (see http://www.x-io.co.uk/category/open-source/ for examples and more details)
 // which fuses acceleration, rotation rate, and magnetic moments to produce a quaternion-based estimate of absolute
 // device orientation -- which can be converted to yaw, pitch, and roll. 
+void MadgwickAHRSupdate(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
+	float recipNorm;
+	float s0, s1, s2, s3;
+	float qDot1, qDot2, qDot3, qDot4;
+	float hx, hy;
+	float _2q1mx, _2q1my, _2q1mz, _2q2mx, _2bx, _2bz, _4bx, _4bz, _2q1, _2q2, _2q3, _2q4, _2q1q3, _2q3q4, q1q1, q1q2, q1q3, q1q4, q2q2, q2q3, q2q4, q3q3, q3q4, q4q4;
 
-// TODO : implement the fast inverse squareroot to reduce computation time (compare)
+	// Use IMU algorithm if magnetometer measurement invalid (avoids NaN in magnetometer normalisation)
+	if((mx == 0.0f) && (my == 0.0f) && (mz == 0.0f)) {
+		Serial.println("Mag data invalid - no update");
+		return;
+	}
 
-void MadgwickQuaternionUpdate(float ax, float ay, float az, float wx, float wy, float wz, float mx, float my, float mz)
-{
-  // local system variables
-  float norm; // vector norm
-  float SEqDot_omega_1, SEqDot_omega_2, SEqDot_omega_3, SEqDot_omega_4; // quaternion rate from gyroscopes elements
-  float f_1, f_2, f_3, f_4, f_5, f_6; // objective function elements
-  float J_11or24, J_12or23, J_13or22, J_14or21, J_32, J_33, // objective function Jacobian elements
-  J_41, J_42, J_43, J_44, J_51, J_52, J_53, J_54, J_61, J_62, J_63, J_64; //
-  float SEqHatDot_1, SEqHatDot_2, SEqHatDot_3, SEqHatDot_4; // estimated direction of the gyroscope error
-  float w_err_x, w_err_y, w_err_z; // estimated direction of the gyroscope error (angular)
-  float h_x, h_y, h_z; // computed flux in the earth frame
-  // axulirary variables to avoid reapeated calcualtions
-  float halfSEq_1 = 0.5f * SEq_1;
-  float halfSEq_2 = 0.5f * SEq_2;
-  float halfSEq_3 = 0.5f * SEq_3;
-  float halfSEq_4 = 0.5f * SEq_4;
-  float twoSEq_1 = 2.0f * SEq_1;
-  float twoSEq_2 = 2.0f * SEq_2;
-  float twoSEq_3 = 2.0f * SEq_3;
-  float twoSEq_4 = 2.0f * SEq_4;
-  float twob_x = 2.0f * b_x;
-  float twob_z = 2.0f * b_z;
-  float twob_xSEq_1 = twob_x * SEq_1;
-  float twob_xSEq_2 = twob_x * SEq_2;
-  float twob_xSEq_3 = twob_x * SEq_3;
-  float twob_xSEq_4 = twob_x * SEq_4;
-  float twob_zSEq_1 = twob_z * SEq_1;
-  float twob_zSEq_2 = twob_z * SEq_2;
-  float twob_zSEq_3 = twob_z * SEq_3;
-  float twob_zSEq_4 = twob_z * SEq_4;
-  float SEq_1SEq_2;
-  float SEq_1SEq_3 = SEq_1 * SEq_3;
-  float SEq_1SEq_4;
-  float SEq_2SEq_3;
-  float SEq_2SEq_4 = SEq_2 * SEq_4;
-  float SEq_3SEq_4;
-  float twom_x;
-  float twom_y;
-  float twom_z;
+	// Rate of change of quaternion from gyroscope
+	qDot1 = 0.5f * (-q2 * gx - q3 * gy - q4 * gz);
+	qDot2 = 0.5f * (q1 * gx + q3 * gz - q4 * gy);
+	qDot3 = 0.5f * (q1 * gy - q2 * gz + q4 * gx);
+	qDot4 = 0.5f * (q1 * gz + q2 * gy - q3 * gx);
 
-  // normalise the accelerometer measurement
-  //norm = AccurateInvSqrt(ax * ax + ay * ay + az * az);
-  norm = InvSqrt(ax * ax + ay * ay + az * az);
-  ax *= norm;
-  ay *= norm;
-  az *= norm;
+	// Compute feedback only if accelerometer measurement valid (avoids NaN in accelerometer normalisation)
+	if(!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f))) {
 
-  // normalise the magnetometer measurement
-  //norm = AccurateInvSqrt(mx * mx + my * my + mz * mz);
-  norm = InvSqrt(mx * mx + my * my + mz * mz);
-  mx *= norm;
-  my *= norm;
-  mz *= norm;
+		// Normalise accelerometer measurement
+		recipNorm = AccurateInvSqrt(ax * ax + ay * ay + az * az);
+                //recipNorm = 1. / sqrt(ax * ax + ay * ay + az * az);
+		ax *= recipNorm;
+		ay *= recipNorm;
+		az *= recipNorm;   
 
-  // Those must be calculated *after* the magnetometers got normalized
-  // (mistake in the original paper)
-  // Correction suggested 2 * m_x (provided mag) while it's 2 * mx (normalized mag)
-  twom_x = 2.0f * mx;
-  twom_y = 2.0f * my;
-  twom_z = 2.0f * mz;
+		// Normalise magnetometer measurement
+		recipNorm = AccurateInvSqrt(mx * mx + my * my + mz * mz);
+                //recipNorm = 1. / sqrt(mx * mx + my * my + mz * mz);
+		mx *= recipNorm;
+		my *= recipNorm;
+		mz *= recipNorm;
 
-  // compute the objective function and Jacobian
-  f_1 = twoSEq_2 * SEq_4 - twoSEq_1 * SEq_3 - ax;
-  f_2 = twoSEq_1 * SEq_2 + twoSEq_3 * SEq_4 - ay;
-  f_3 = 1.0f - twoSEq_2 * SEq_2 - twoSEq_3 * SEq_3 - az;
-  f_4 = twob_x * (0.5f - SEq_3 * SEq_3 - SEq_4 * SEq_4) + twob_z * (SEq_2SEq_4 - SEq_1SEq_3) - mx;
-  f_5 = twob_x * (SEq_2 * SEq_3 - SEq_1 * SEq_4) + twob_z * (SEq_1 * SEq_2 + SEq_3 * SEq_4) - my;
-  f_6 = twob_x * (SEq_1SEq_3 + SEq_2SEq_4) + twob_z * (0.5f - SEq_2 * SEq_2 - SEq_3 * SEq_3) - mz;
+		// Auxiliary variables to avoid repeated arithmetic
+		_2q1mx = 2.0f * q1 * mx;
+		_2q1my = 2.0f * q1 * my;
+		_2q1mz = 2.0f * q1 * mz;
+		_2q2mx = 2.0f * q2 * mx;
+		_2q1 = 2.0f * q1;
+		_2q2 = 2.0f * q2;
+		_2q3 = 2.0f * q3;
+		_2q4 = 2.0f * q4;
+		_2q1q3 = 2.0f * q1 * q3;
+		_2q3q4 = 2.0f * q3 * q4;
+		q1q1 = q1 * q1;
+		q1q2 = q1 * q2;
+		q1q3 = q1 * q3;
+		q1q4 = q1 * q4;
+		q2q2 = q2 * q2;
+		q2q3 = q2 * q3;
+		q2q4 = q2 * q4;
+		q3q3 = q3 * q3;
+		q3q4 = q3 * q4;
+		q4q4 = q4 * q4;
 
-  J_11or24 = twoSEq_3; // J_11 negated in matrix multiplication
-  J_12or23 = 2.0f * SEq_4;
-  J_13or22 = twoSEq_1; // J_12 negated in matrix multiplication
-  J_14or21 = twoSEq_2;
-  J_32 = 2.0f * J_14or21; // negated in matrix multiplication
-  J_33 = 2.0f * J_11or24; // negated in matrix multiplication
-  J_41 = twob_zSEq_3; // negated in matrix multiplication
-  J_42 = twob_zSEq_4;
-  J_43 = 2.0f * twob_xSEq_3 + twob_zSEq_1; // negated in matrix multiplication
-  J_44 = 2.0f * twob_xSEq_4 - twob_zSEq_2; // negated in matrix multiplication
-  J_51 = twob_xSEq_4 - twob_zSEq_2; // negated in matrix multiplication
-  J_52 = twob_xSEq_3 + twob_zSEq_1;
-  J_53 = twob_xSEq_2 + twob_zSEq_4;
-  J_54 = twob_xSEq_1 - twob_zSEq_3; // negated in matrix multiplication
-  J_61 = twob_xSEq_3;
-  J_62 = twob_xSEq_4 - 2.0f * twob_zSEq_2;
-  J_63 = twob_xSEq_1 - 2.0f * twob_zSEq_3;
-  J_64 = twob_xSEq_2;
+		// Reference direction of Earth's magnetic field
+		hx = mx * q1q1 - _2q1my * q4 + _2q1mz * q3 + mx * q2q2 + _2q2 * my * q3 + _2q2 * mz * q4 - mx * q3q3 - mx * q4q4;
+		hy = _2q1mx * q4 + my * q1q1 - _2q1mz * q2 + _2q2mx * q3 - my * q2q2 + my * q3q3 + _2q3 * mz * q4 - my * q4q4;
+		_2bx = sqrt(hx * hx + hy * hy);
+		_2bz = -_2q1mx * q3 + _2q1my * q2 + mz * q1q1 + _2q2mx * q4 - mz * q2q2 + _2q3 * my * q4 - mz * q3q3 + mz * q4q4;
+		_4bx = 2.0f * _2bx;
+		_4bz = 2.0f * _2bz;
 
-  //compute the gradient (matrix multiplication)
-  SEqHatDot_1 = J_14or21 * f_2 - J_11or24 * f_1 - J_41 * f_4 - J_51 * f_5 + J_61 * f_6;
-  SEqHatDot_2 = J_12or23 * f_1 + J_13or22 * f_2 - J_32 * f_3 + J_42 * f_4 + J_52 * f_5 + J_62 * f_6;
-  SEqHatDot_3 = J_12or23 * f_2 - J_33 * f_3 - J_13or22 * f_1 - J_43 * f_4 + J_53 * f_5 + J_63 * f_6;
-  SEqHatDot_4 = J_14or21 * f_1 + J_11or24 * f_2 - J_44 * f_4 - J_54 * f_5 + J_64 * f_6;
+		// Gradient decent algorithm corrective step
+		s0 = -_2q3 * (2.0f * q2q4 - _2q1q3 - ax) + _2q2 * (2.0f * q1q2 + _2q3q4 - ay) - _2bz * q3 * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q4 + _2bz * q2) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q3 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+		s1 = _2q4 * (2.0f * q2q4 - _2q1q3 - ax) + _2q1 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q2 * (1 - 2.0f * q2q2 - 2.0f * q3q3 - az) + _2bz * q4 * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q3 + _2bz * q1) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q4 - _4bz * q2) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+		s2 = -_2q1 * (2.0f * q2q4 - _2q1q3 - ax) + _2q4 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q3 * (1 - 2.0f * q2q2 - 2.0f * q3q3 - az) + (-_4bx * q3 - _2bz * q1) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q2 + _2bz * q4) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q1 - _4bz * q3) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+		s3 = _2q2 * (2.0f * q2q4 - _2q1q3 - ax) + _2q3 * (2.0f * q1q2 + _2q3q4 - ay) + (-_4bx * q4 + _2bz * q2) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q1 + _2bz * q3) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q2 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+		recipNorm = AccurateInvSqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3); // normalise step magnitude
+		s0 *= recipNorm;
+		s1 *= recipNorm;
+		s2 *= recipNorm;
+		s3 *= recipNorm;
 
-  // normalise the gradient to estimate direction of the gyroscope error
-  norm = InvSqrt(SEqHatDot_1 * SEqHatDot_1 + SEqHatDot_2 * SEqHatDot_2 + SEqHatDot_3 * SEqHatDot_3 + SEqHatDot_4 * SEqHatDot_4);
-  SEqHatDot_1 = SEqHatDot_1 * norm;
-  SEqHatDot_2 = SEqHatDot_2 * norm;
-  SEqHatDot_3 = SEqHatDot_3 * norm;
-  SEqHatDot_4 = SEqHatDot_4 * norm;
+		// Apply feedback step
+		qDot1 -= beta * s0;
+		qDot2 -= beta * s1;
+		qDot3 -= beta * s2;
+		qDot4 -= beta * s3;
+	}
 
-  // compute angular estimated direction of the gyroscope error
-  w_err_x = twoSEq_1 * SEqHatDot_2 - twoSEq_2 * SEqHatDot_1 - twoSEq_3 * SEqHatDot_4 + twoSEq_4 * SEqHatDot_3;
-  w_err_y = twoSEq_1 * SEqHatDot_3 + twoSEq_2 * SEqHatDot_4 - twoSEq_3 * SEqHatDot_1 - twoSEq_4 * SEqHatDot_2;
-  w_err_z = twoSEq_1 * SEqHatDot_4 - twoSEq_2 * SEqHatDot_3 + twoSEq_3 * SEqHatDot_2 - twoSEq_4 * SEqHatDot_1;
+	// Integrate rate of change of quaternion to yield quaternion
+	q1 += qDot1 * deltat;
+	q2 += qDot2 * deltat;
+	q3 += qDot3 * deltat;
+	q4 += qDot4 * deltat;
 
-  // compute and remove the gyroscope baises
-  w_bx += w_err_x * deltat * zeta;
-  w_by += w_err_y * deltat * zeta;
-  w_bz += w_err_z * deltat * zeta;
-  wx -= w_bx;
-  wy -= w_by;
-  wz -= w_bz;
-
-  // compute the quaternion rate measured by gyroscopes
-  SEqDot_omega_1 = -halfSEq_2 * wx - halfSEq_3 * wy - halfSEq_4 * wz;
-  SEqDot_omega_2 = halfSEq_1 * wx + halfSEq_3 * wz - halfSEq_4 * wy;
-  SEqDot_omega_3 = halfSEq_1 * wy - halfSEq_2 * wz + halfSEq_4 * wx;
-  SEqDot_omega_4 = halfSEq_1 * wz + halfSEq_2 * wy - halfSEq_3 * wx;
-
-  // compute then integrate the estimated quaternion rate
-  SEq_1 += (SEqDot_omega_1 - (beta * SEqHatDot_1)) * deltat;
-  SEq_2 += (SEqDot_omega_2 - (beta * SEqHatDot_2)) * deltat;
-  SEq_3 += (SEqDot_omega_3 - (beta * SEqHatDot_3)) * deltat;
-  SEq_4 += (SEqDot_omega_4 - (beta * SEqHatDot_4)) * deltat;
-
-  // normalise quaternion
-  //norm = AccurateInvSqrt(SEq_1 * SEq_1 + SEq_2 * SEq_2 + SEq_3 * SEq_3 + SEq_4 * SEq_4);
-  norm = InvSqrt(SEq_1 * SEq_1 + SEq_2 * SEq_2 + SEq_3 * SEq_3 + SEq_4 * SEq_4);
-  SEq_1 *= norm;
-  SEq_2 *= norm;
-  SEq_3 *= norm;
-  SEq_4 *= norm;
-
-  // compute flux in the earth frame
-  SEq_1SEq_2 = SEq_1 * SEq_2; // recompute axulirary variables
-  SEq_1SEq_3 = SEq_1 * SEq_3;
-  SEq_1SEq_4 = SEq_1 * SEq_4;
-  SEq_3SEq_4 = SEq_3 * SEq_4;
-  SEq_2SEq_3 = SEq_2 * SEq_3;
-  SEq_2SEq_4 = SEq_2 * SEq_4;
-
-  h_x = twom_x * (0.5f - SEq_3 * SEq_3 - SEq_4 * SEq_4) + twom_y * (SEq_2SEq_3 - SEq_1SEq_4) + twom_z * (SEq_2SEq_4 + SEq_1SEq_3);
-  h_y = twom_x * (SEq_2SEq_3 + SEq_1SEq_4) + twom_y * (0.5f - SEq_2 * SEq_2 - SEq_4 * SEq_4) + twom_z * (SEq_3SEq_4 - SEq_1SEq_2);
-  h_z = twom_x * (SEq_2SEq_4 - SEq_1SEq_3) + twom_y * (SEq_3SEq_4 + SEq_1SEq_2) + twom_z * (0.5f - SEq_2 * SEq_2 - SEq_3 * SEq_3);
-
-  // normalise the flux vector to have only components in the x and z
-  b_x = sqrt((h_x * h_x) + (h_y * h_y));
-  b_z = h_z;
-
+	// Normalise quaternion
+	recipNorm = AccurateInvSqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
+        //recipNorm = 1. / sqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
+	q1 *= recipNorm;
+	q2 *= recipNorm;
+	q3 *= recipNorm;
+	q4 *= recipNorm;
 }
 
 
@@ -1451,12 +1404,6 @@ void ComputeHeading(void)
 
   LocalRoll = roll;
   LocalPitch = pitch;
-
-  if(SensorOrientation == BOTTOM)
-  {
-    //LocalRoll = LocalRoll * -1.0;
-    LocalPitch = LocalPitch * -1.0;
-  }
 	
   iBpz = iBpz * -1.0;    // Z mag axis is inverted on the LSM9DS0
   
@@ -1503,6 +1450,283 @@ float AccurateInvSqrt(float x){
   return tmp * (1.69000231f - 0.714158168f * x * tmp * tmp);
 }
 
+void magOffsetCalibration(void)
+{
+  boolean QuitLoop = false;
+  boolean LedState = 0;
+  
+  
+  resetMagOffsetCalibration();
+  while(!digitalRead(SWITCH_INPUT))
+    delay(20);
+  delay(200);
+  
+  while(!QuitLoop)
+  {
+    delay(50);
+    ReadMagneto();
+    magOffsetAutocalMax[0] = max(magOffsetAutocalMax[0], MagnetometerX.Value);
+    magOffsetAutocalMax[1] = max(magOffsetAutocalMax[1], MagnetometerY.Value);
+    magOffsetAutocalMax[2] = max(magOffsetAutocalMax[2], MagnetometerZ.Value);
+    magOffsetAutocalMin[0] = min(magOffsetAutocalMin[0], MagnetometerX.Value);
+    magOffsetAutocalMin[1] = min(magOffsetAutocalMin[1], MagnetometerY.Value);
+    magOffsetAutocalMin[2] = min(magOffsetAutocalMin[2], MagnetometerZ.Value);
+    
+    LedState = 1 - LedState;
+    digitalWrite(POWER_LED, LedState);    
+    
+    if(!digitalRead(SWITCH_INPUT))
+    {
+      digitalWrite(POWER_LED, HIGH);
+      QuitLoop = true;
+      
+    } 
+  }
+  while(!digitalRead(SWITCH_INPUT))  delay(20);
+  Serial.println("Mag got recalibrated");
+  Serial.print("offsets: ");
+  for(int i = 0 ; i < 3 ; i++)
+  {
+     mag_bias[i] = (magOffsetAutocalMax[i] + magOffsetAutocalMin[i]) / 2;
+     mbias[i] = mRes * (float)mag_bias[i];
+     Serial.print(mag_bias[i]);
+     Serial.print(" ; ");
+  }
+  Serial.println();
+}
+
+//=====================================================================================================
+// function gyroOffsetCalibration
+//=====================================================================================================
+//
+// calibrate the zero of the gyroscope
+//
+void gyroOffsetCalibration(void)
+{
+    //gyro offset autocalibration
+    // update min, max, sum and counter
+    gyroOffsetAutocalMax[0] = max(gyroOffsetAutocalMax[0], GyroscopeX.Value);
+    gyroOffsetAutocalMax[1] = max(gyroOffsetAutocalMax[1], GyroscopeY.Value);
+    gyroOffsetAutocalMax[2] = max(gyroOffsetAutocalMax[2], GyroscopeY.Value);
+    
+    gyroOffsetAutocalMin[0] = min(gyroOffsetAutocalMin[0], GyroscopeX.Value);
+    gyroOffsetAutocalMin[1] = min(gyroOffsetAutocalMin[1], GyroscopeY.Value);
+    gyroOffsetAutocalMin[2] = min(gyroOffsetAutocalMin[2], GyroscopeZ.Value);
+    
+    gyroOffsetAutocalSum[0] += GyroscopeX.Value;
+    gyroOffsetAutocalSum[1] += GyroscopeY.Value;
+    gyroOffsetAutocalSum[2] += GyroscopeZ.Value;
+    gyroOffsetAutocalCounter++;
+    
+    // if the max-min differences are above the threshold, reset the counter and values
+    if((gyroOffsetAutocalMax[0]-gyroOffsetAutocalMin[0] > gyroOffsetAutocalThreshold) 
+       ||(gyroOffsetAutocalMax[1]-gyroOffsetAutocalMin[1] > gyroOffsetAutocalThreshold)
+       ||(gyroOffsetAutocalMax[2]-gyroOffsetAutocalMin[2] > gyroOffsetAutocalThreshold)) 
+    {
+        resetGyroOffsetCalibration();
+        resetAccOffsetCalibration();
+    }
+    
+    // check if there are enough stable samples. If yes, update the offsets and the "calibrate" flag
+    if(gyroOffsetAutocalCounter >= (gyroOffsetAutocalTime / 1000. * SampleRate) )
+    { // update bias
+      Serial.println("Gyro AutoCal");
+      Serial.print("offsets: ");
+      for(int i = 0 ; i < 3 ; i++)
+      {
+        gyro_bias[i] = (gyroOffsetAutocalSum[i] * 1.0)/ gyroOffsetAutocalCounter;
+        gbias[i] = gRes * (float)gyro_bias[i];
+        Serial.print(gyro_bias[i]);
+        Serial.print(" ; ");
+      }
+      Serial.println();
+      gyroOffsetCalDone = true;
+      gyroOffsetCalElapsed = millis();      
+    }
+}
+
+
+// Reset gyro offset auto calibration / min / max
+void resetGyroOffsetCalibration(void) {
+  gyroOffsetAutocalCounter = 0;
+      
+  for(int i = 0 ; i<3 ; i++)
+  {                            
+    gyroOffsetAutocalMin[i] = 40000;
+    gyroOffsetAutocalMax[i] = -40000;
+    gyroOffsetAutocalSum[i] = 0;    
+    gyro_bias[i] = 0;
+    gbias[i] = 0.0;
+   }
+}
+
+// Reset gyro offset auto calibration / min / max
+void resetMagOffsetCalibration(void) {
+
+  for(int i = 0 ; i<3 ; i++)
+  {  
+    magOffsetAutocalMin[i] = 40000;
+    magOffsetAutocalMax[i] = -40000;
+    mag_bias[i] = 0;
+    mbias[i] = 0.0;
+  }
+}
+
+// Reset gyro offset auto calibration / min / max
+void resetAccOffsetCalibration(void) {
+  for(int i = 0 ; i<3 ; i++)
+  {                            
+    accel_bias[i] = 0;
+    abias[i] = 0.0;
+    accOffsetAutocalSum[i] = 0;
+  }
+}
+
+
+void CalibrateAccGyroMag(void)
+{
+  boolean QuitLoop = false;
+  boolean LedState = 0;
+
+  Serial.println("ACC+GYRO+MAG Calibration Started");
+  Serial.println("Please place the module on a flat and stable surface");
+  while(!digitalRead(SWITCH_INPUT))
+    delay(20);
+  
+  resetAccOffsetCalibration();
+  resetGyroOffsetCalibration();
+  resetMagOffsetCalibration();
+  
+  while(!QuitLoop)
+  {
+    delay(10);
+    ReadAccel();
+    ReadGyro();
+    
+    magOffsetAutocalMax[0] = max(magOffsetAutocalMax[0], MagnetometerX.Value);
+    magOffsetAutocalMax[1] = max(magOffsetAutocalMax[1], MagnetometerY.Value);
+    magOffsetAutocalMax[2] = max(magOffsetAutocalMax[2], MagnetometerZ.Value);
+    magOffsetAutocalMin[0] = min(magOffsetAutocalMin[0], MagnetometerX.Value);
+    magOffsetAutocalMin[1] = min(magOffsetAutocalMin[1], MagnetometerY.Value);
+    magOffsetAutocalMin[2] = min(magOffsetAutocalMin[2], MagnetometerZ.Value);    
+    
+    LedState = 1 - LedState;
+    digitalWrite(POWER_LED, LedState);
+    if(!digitalRead(SWITCH_INPUT))
+    {
+      digitalWrite(POWER_LED, HIGH);
+      Serial.println("Calibration interrupted");
+      return;
+    } 
+  
+    //gyro offset autocalibration
+    // update min, max, sum and counter
+    gyroOffsetAutocalMax[0] = max(gyroOffsetAutocalMax[0], GyroscopeX.Value);
+    gyroOffsetAutocalMax[1] = max(gyroOffsetAutocalMax[1], GyroscopeY.Value);
+    gyroOffsetAutocalMax[2] = max(gyroOffsetAutocalMax[2], GyroscopeY.Value);
+    
+    gyroOffsetAutocalMin[0] = min(gyroOffsetAutocalMin[0], GyroscopeX.Value);
+    gyroOffsetAutocalMin[1] = min(gyroOffsetAutocalMin[1], GyroscopeY.Value);
+    gyroOffsetAutocalMin[2] = min(gyroOffsetAutocalMin[2], GyroscopeZ.Value);
+    
+    gyroOffsetAutocalSum[0] += GyroscopeX.Value;
+    gyroOffsetAutocalSum[1] += GyroscopeY.Value;
+    gyroOffsetAutocalSum[2] += GyroscopeZ.Value;
+    
+    accOffsetAutocalSum[0] += AccelerationX.Value;
+    accOffsetAutocalSum[1] += AccelerationY.Value;
+    accOffsetAutocalSum[2] += AccelerationZ.Value - (int)(1./aRes);
+    
+    gyroOffsetAutocalCounter++;
+    
+    // if the max-min differences are above the threshold, reset the counter and values
+    if((gyroOffsetAutocalMax[0]-gyroOffsetAutocalMin[0] > gyroOffsetAutocalThreshold) 
+       ||(gyroOffsetAutocalMax[1]-gyroOffsetAutocalMin[1] > gyroOffsetAutocalThreshold)
+       ||(gyroOffsetAutocalMax[2]-gyroOffsetAutocalMin[2] > gyroOffsetAutocalThreshold)) 
+    {
+        resetGyroOffsetCalibration();
+        resetAccOffsetCalibration();
+        
+    }
+    
+    // check if there are enough stable samples. If yes, update the offsets and the "calibrate" flag
+    if(gyroOffsetAutocalCounter >= (gyroOffsetAutocalTime / 1000. * SampleRate) )
+    { // update bias
+      Serial.println("Gyro Stable");
+      for(int i = 0 ; i < 3 ; i++)
+      {
+        gyro_bias[i] = (gyroOffsetAutocalSum[i] * 1.0)/ gyroOffsetAutocalCounter;
+        gbias[i] = gRes * (float)gyro_bias[i];
+        accel_bias[i] = (accOffsetAutocalSum[i] * 1.0)/ gyroOffsetAutocalCounter;
+        abias[i] = aRes * (float)accel_bias[i];
+      }
+      QuitLoop = true; 
+    }
+  }
+  
+  sprintf(StringBuffer, "*** FOUND Bias acc= %d %d %d", accel_bias[0], accel_bias[1], accel_bias[2]);
+  printf("%s\n", StringBuffer);
+  PrintToOSC(StringBuffer);
+  sprintf(StringBuffer,"*** FOUND Bias gyro= %d %d %d", gyro_bias[0], gyro_bias[1], gyro_bias[2]);
+  printf("%s\n", StringBuffer);
+  PrintToOSC(StringBuffer);
+    
+  digitalWrite(POWER_LED, HIGH);
+  int WinkCounter = 0;
+  while(digitalRead(SWITCH_INPUT))  // Waits for the GP switch to proceed to mag calibration
+  {
+    delay(20);
+    WinkCounter++;
+    if(WinkCounter > 50)
+    {
+      digitalWrite(POWER_LED, LOW);
+      delay(100);
+      digitalWrite(POWER_LED, HIGH);
+      WinkCounter = 0;
+    }
+  }  
+  
+  resetMagOffsetCalibration();
+  while(!digitalRead(SWITCH_INPUT))
+    delay(20);
+  delay(200);
+  sprintf(StringBuffer, "*** Proceeding to MAG calibration - Max out all axis **** ");
+  printf("%s\n", StringBuffer);
+  PrintToOSC(StringBuffer);
+  
+  QuitLoop = false;
+  while(!QuitLoop)
+  {
+    delay(50);
+    ReadMagneto();
+    magOffsetAutocalMax[0] = max(magOffsetAutocalMax[0], MagnetometerX.Value);
+    magOffsetAutocalMax[1] = max(magOffsetAutocalMax[1], MagnetometerY.Value);
+    magOffsetAutocalMax[2] = max(magOffsetAutocalMax[2], MagnetometerZ.Value);
+    magOffsetAutocalMin[0] = min(magOffsetAutocalMin[0], MagnetometerX.Value);
+    magOffsetAutocalMin[1] = min(magOffsetAutocalMin[1], MagnetometerY.Value);
+    magOffsetAutocalMin[2] = min(magOffsetAutocalMin[2], MagnetometerZ.Value);
+   
+    LedState = 1 - LedState;
+    digitalWrite(POWER_LED, LedState);    
+  
+    if(!digitalRead(SWITCH_INPUT))
+    {
+      digitalWrite(POWER_LED, HIGH);
+      QuitLoop = true;
+    } 
+  }
+  while(!digitalRead(SWITCH_INPUT))
+    delay(20);
+  for(int i = 0 ; i < 3 ; i++)
+  {
+     mag_bias[i] = (magOffsetAutocalMax[i] + magOffsetAutocalMin[i]) / 2;
+     mbias[i] = mRes * (float)mag_bias[i];
+  }
+  sprintf(StringBuffer,"*** FOUND Bias mag= %d %d %d", mag_bias[0], mag_bias[1], mag_bias[2]);
+  printf("%s\n", StringBuffer);
+  PrintToOSC(StringBuffer);
+  SaveFlashPrefs();
+}
 
 void CalibrateMag(float *CalibratedArray, float *UnCalibratedArray)    
 {  
@@ -1585,7 +1809,6 @@ void ProcessSerial(void)
     printf("%s %d\n", TEXT_MAG_OFFSETZ, mag_bias[2]);   
    
     printf("%s %f\n", TEXT_BETA, beta); 
-    printf("%s %f\n", TEXT_BETA, zeta); 
    
     printf("%s %f %f %f %f %f %f %f %f %f\n", TEXT_MATRIX, rotation_matrix[0][0], rotation_matrix[0][1], rotation_matrix[0][2], rotation_matrix[1][0], rotation_matrix[1][1], rotation_matrix[1][2], rotation_matrix[2][0], rotation_matrix[2][1], rotation_matrix[2][2]);   
    
@@ -1771,14 +1994,6 @@ void ProcessSerial(void)
     beta = atof(&StringBuffer[Index]);
     return;
   }
-  
-  else if(!strncmp(TEXT_ZETA,StringBuffer,4))
-  {
-    Index = SkipToValue(StringBuffer);
-    zeta = atof(&StringBuffer[Index]);
-    return;
-  }
-  
 
   else if(!strncmp("defaults",StringBuffer,8))
   {
@@ -1936,7 +2151,7 @@ void LoadParams(void)
         Serial.println("]");
       }
       printf("]\n\n");
-      printf("Madgwick Specifics: Beta = %f / Zeta = %f\n", beta, zeta);
+      printf("Madgwick Specifics: Beta = %f\n", beta);
       SerFlash.close();
     }
   }
