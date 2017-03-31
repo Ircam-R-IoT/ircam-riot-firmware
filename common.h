@@ -20,7 +20,7 @@
 #define DEFAULT_UDP_PORT  8888
 #define DEFAULT_UDP_SERVICE_PORT  9999
 #define DEFAULT_SAMPLE_RATE  5
-#define VERSION_DATE        "R-IoT v1.5 - IRCAM 2015"
+#define VERSION_DATE        "R-IoT v1.6 - IRCAM 2015"
 #define PARAMS_FILENAME     "params.txt"
 #define WEB_SERVER_DELAY    100          // Time to press on the switch to start the webserver      
 
@@ -69,11 +69,47 @@ typedef enum CalStage {START, X_PLUS_0, X_PLUS_180, X_MINUS_0, X_MINUS_180, Y_PL
 #define TEXT_DHCP         "dhcp"
 
 // Offsets & calibration matrix
-#define TEXT_ACC_OFFSETS  "acc_offset"
-#define TEXT_GYRO_OFFSETS  "gyr_offset"
-#define TEXT_MAG_OFFSETS  "mag_offset"
+#define TEXT_ACC_OFFSETX  "acc_offsetx"
+#define TEXT_ACC_OFFSETY  "acc_offsety"
+#define TEXT_ACC_OFFSETZ  "acc_offsetz"
+
+#define TEXT_GYRO_OFFSETX  "gyr_offsetx"
+#define TEXT_GYRO_OFFSETY  "gyr_offsety"
+#define TEXT_GYRO_OFFSETZ  "gyr_offsetz"
+
+#define TEXT_MAG_OFFSETX  "mag_offsetx"
+#define TEXT_MAG_OFFSETY  "mag_offsety"
+#define TEXT_MAG_OFFSETZ  "mag_offsetz"
 
 #define TEXT_MATRIX        "matrix"
+
+#define TEXT_BETA          "beta"
+#define TEXT_ZETA          "zeta"
+
+
+#define TEXT_CALIBRATION_00  "Entering calibration mode"
+#define TEXT_CALIBRATION_01  "...Accelerometer-Gyro Calibration"
+#define TEXT_CALIBRATION_02  "Place Module on a flat surface"
+#define TEXT_CALIBRATION_03  "Press the switch or send the *next* command"
+#define TEXT_CALIBRATION_20  "*** STARTING CALIBRATION ACC-GYR ***"
+#define TEXT_CALIBRATION_21  "Acceleration-Gyroscope calibration finished"
+#define TEXT_CALIBRATION_22  "Entering Calibration of the Magnetometers"
+
+#define TEXT_X_PLUS_0        "X+ 0deg"
+#define TEXT_X_PLUS_180      "X+ 180deg"
+#define TEXT_X_MINUS_0       "X- 0deg"
+#define TEXT_X_MINUS_180     "X- 180deg"
+#define TEXT_Y_PLUS_0        "Y+ 0deg"
+#define TEXT_Y_PLUS_180      "Y+ 180deg"
+#define TEXT_Y_MINUS_0       "Y- 0deg"
+#define TEXT_Y_MINUS_180     "Y- 180deg"
+#define TEXT_Z_PLUS_0        "Z+ 0deg"
+#define TEXT_Z_PLUS_180      "Z+ 180deg"
+#define TEXT_Z_MINUS_0       "Z- 0deg"
+#define TEXT_Z_MINUS_180     "Z- 180deg"
+
+#define TEXT_CALIB_END       "Calibration Sequence finished"
+
 
 #define MIN_SAMPLE_RATE     3
 #define MAX_SAMPLE_RATE	    1000

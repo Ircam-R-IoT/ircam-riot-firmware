@@ -1,7 +1,7 @@
 /* R-IoT :
- 
- Current firmware version : 1.5
 
+ Current version : 1.6
+ 
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
  
@@ -11,7 +11,7 @@
  Battery reading in volt = [analogRead() * 1.7] / (4096 * 0.364)
  or, simplified to 
  Battery reading in volt = analogRead() / 877.
-  
+ 
  Rev History :
  
  1.5 : adding a AP style connection to allow streaming to multiple computers / devices
@@ -78,7 +78,7 @@ int status = WL_IDLE_STATUS;
 int statusAP = false;
 int PacketStatus;
 boolean ConfigurationMode = false;
-boolean AcceptOSC = false;
+boolean AcceptOSC = true;
 byte PageToDisplay = CONFIG_WEB_PAGE;
 unsigned int ConfigModeCounter = 0;
 int TempInt = 0;
@@ -90,6 +90,7 @@ OscBuffer RawSensors;
 OscBuffer Quaternions;
 OscBuffer EulerAngles;
 OscBuffer AnalogInputs;
+OscBuffer Message;
 
 unsigned long ElapsedTime = 0;
 unsigned long ElapsedTime2 = 0;
@@ -451,6 +452,30 @@ void loop() {
         //Serial.println(packetBuffer);
         //Serial.println("Packet Len:");
         //Serial.println(len);
+        
+        //Debug
+        /*for (int i=0 ; i < len ; i++)
+        {
+          if(packetBuffer[i] == '\0')
+            printf("_");
+          else
+            printf("%c",packetBuffer[i]);
+        }
+        printf("\n");
+        
+        StringToOsc(&Message, "/0/message", TEXT_CALIBRATION_02);
+        printf("Generated Osc Message:\n");
+        for (int i=0 ; i < len ; i++)
+        {
+          if(Message.buf[i] == '\0')
+            printf("_");
+          else
+            printf("%c",Message.buf[i]);
+        }
+        printf("\n");
+        PrintToOSC(TEXT_CALIBRATION_02);
+        */
+        
         // Actual parsing
         // Checks that's for the proper ID / module
         sprintf(StringBuffer, "/%u/\0",ModuleID);
@@ -711,7 +736,7 @@ void loop() {
         UdpPacket.endPacket();
         // Optional
         UdpPacket.write((uint8_t*)EulerAngles.buf, EulerAngles.PacketSize);
-        UdpPacket.endPacket();
+        UdpPacket.endPacket();        
         digitalWrite(POWER_LED, LOW);
        }
     }
@@ -1521,7 +1546,7 @@ boolean GrabSerialMessage(void)
 
 void ProcessSerial(void)
 {
-  unsigned char i;
+  unsigned char i, j;
   unsigned char Index;
 
   byte temp_ip[4];
@@ -1535,7 +1560,7 @@ void ProcessSerial(void)
     // Outputs all the configuration  
     printf("%s %d\n", TEXT_DHCP, UseDHCP);
     printf("%s %s\n", TEXT_SSID, ssid);
-    printf("%s %s\n", TEXT_WIFI_MODE, APorStation);
+    printf("%s %d\n", TEXT_WIFI_MODE, APorStation);
     printf("%s %d\n", TEXT_SECURITY, UseSecurity);
     printf("%s %s\n", TEXT_PASSWORD, password);
     printf("%s %u.%u.%u.%u\n", TEXT_OWNIP, LocalIP[0], LocalIP[1], LocalIP[2], LocalIP[3] );
@@ -1547,8 +1572,23 @@ void ProcessSerial(void)
     printf("%s %u\n", TEXT_SAMPLE_RATE, SampleRate);
     
     // All offsets as lists + rotation matrix
+    printf("%s %d\n", TEXT_ACC_OFFSETX, accel_bias[0]);
+    printf("%s %d\n", TEXT_ACC_OFFSETY, accel_bias[1]);
+    printf("%s %d\n", TEXT_ACC_OFFSETZ, accel_bias[2]);
+   
+    printf("%s %d\n", TEXT_GYRO_OFFSETX, gyro_bias[0]);
+    printf("%s %d\n", TEXT_GYRO_OFFSETY, gyro_bias[1]);
+    printf("%s %d\n", TEXT_GYRO_OFFSETZ, gyro_bias[2]);
     
-    
+    printf("%s %d\n", TEXT_MAG_OFFSETX, mag_bias[0]);
+    printf("%s %d\n", TEXT_MAG_OFFSETY, mag_bias[1]);
+    printf("%s %d\n", TEXT_MAG_OFFSETZ, mag_bias[2]);   
+   
+    printf("%s %f\n", TEXT_BETA, beta); 
+    printf("%s %f\n", TEXT_BETA, zeta); 
+   
+    printf("%s %f %f %f %f %f %f %f %f %f\n", TEXT_MATRIX, rotation_matrix[0][0], rotation_matrix[0][1], rotation_matrix[0][2], rotation_matrix[1][0], rotation_matrix[1][1], rotation_matrix[1][2], rotation_matrix[2][0], rotation_matrix[2][1], rotation_matrix[2][2]);   
+   
     printf("refresh\n");
   }
 
@@ -1643,6 +1683,103 @@ void ProcessSerial(void)
     return;
   }	
 
+  else if(!strncmp(TEXT_ACC_OFFSETX,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    accel_bias[0] = atoi(&StringBuffer[Index]);
+    abias[0] = (float)accel_bias[0]*aRes;
+    return;
+  }
+  else if(!strncmp(TEXT_ACC_OFFSETY,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    accel_bias[1] = atoi(&StringBuffer[Index]);
+    abias[1] = (float)accel_bias[1]*aRes;
+    return;
+  }
+  else if(!strncmp(TEXT_ACC_OFFSETZ,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    accel_bias[2] = atoi(&StringBuffer[Index]);
+    abias[2] = (float)accel_bias[2]*aRes;
+    return;
+  }
+  
+  else if(!strncmp(TEXT_GYRO_OFFSETX,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    gyro_bias[0] = atoi(&StringBuffer[Index]);
+    gbias[0] = (float)gyro_bias[0]*gRes;
+    return;
+  }
+  else if(!strncmp(TEXT_GYRO_OFFSETY,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    gyro_bias[1] = atoi(&StringBuffer[Index]);
+    gbias[1] = (float)gyro_bias[1]*gRes;
+    return;
+  }
+  else if(!strncmp(TEXT_GYRO_OFFSETZ,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    gyro_bias[2] = atoi(&StringBuffer[Index]);
+    gbias[2] = (float)gyro_bias[2]*gRes;
+    return;
+  }
+  
+  else if(!strncmp(TEXT_MAG_OFFSETX,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    mag_bias[0] = atoi(&StringBuffer[Index]);
+    mbias[0] = (float)mag_bias[0]*mRes;
+    return;
+  }
+  else if(!strncmp(TEXT_MAG_OFFSETY,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    mag_bias[1] = atoi(&StringBuffer[Index]);
+    mbias[1] = (float)mag_bias[1]*mRes;
+    return;
+  }
+  else if(!strncmp(TEXT_MAG_OFFSETZ,StringBuffer,11))
+  {
+    Index = SkipToValue(StringBuffer);
+    mag_bias[2] = atoi(&StringBuffer[Index]);
+    mbias[2] = (float)mag_bias[2]*mRes;
+    return;
+  }
+  
+  else if(!strncmp(TEXT_MATRIX,StringBuffer,5))
+  {
+    Index = SkipToValue(StringBuffer);
+    for(int i = 0 ; i < 3 ; i++)
+    {
+      for(int j = 0 ; j < 3 ; j++)
+      {
+        rotation_matrix[i][j] = atof(&StringBuffer[Index]);
+        Index = SkipToNextValue(StringBuffer, Index);
+      }    
+    }
+    //printf("Updated Matrix :\n");
+    //printf("%s %f %f %f %f %f %f %f %f %f\n", TEXT_MATRIX, rotation_matrix[0][0], rotation_matrix[0][1], rotation_matrix[0][2], rotation_matrix[1][0], rotation_matrix[1][1], rotation_matrix[1][2], rotation_matrix[2][0], rotation_matrix[2][1], rotation_matrix[2][2]);   
+   
+  }
+  
+  else if(!strncmp(TEXT_BETA,StringBuffer,4))
+  {
+    Index = SkipToValue(StringBuffer);
+    beta = atof(&StringBuffer[Index]);
+    return;
+  }
+  
+  else if(!strncmp(TEXT_ZETA,StringBuffer,4))
+  {
+    Index = SkipToValue(StringBuffer);
+    zeta = atof(&StringBuffer[Index]);
+    return;
+  }
+  
+
   else if(!strncmp("defaults",StringBuffer,8))
   {
     // Re open in write mode
@@ -1668,13 +1805,6 @@ void ProcessSerial(void)
   {
     Calibrate();
   }
-
-  else if(!strncmp("offset_gyrZ",StringBuffer,11))
-  {
-    Index = SkipToValue(StringBuffer);
-    gyro_bias[2] = atoi(&StringBuffer[Index]);
-    gbias[2] = (float)gyro_bias[2]*gRes;
-  }		
 }
 
 void LoadParams(void)
@@ -1793,7 +1923,7 @@ void LoadParams(void)
         }
       }
       printf("Loaded Calibration Matrix \n");
-      printf("float rotation_matrix[3][3] = \n");
+      printf("rotation_matrix[3][3] = \n");
       printf("[\n");
       for(int i=0 ; i<3 ; i++)
       { 
@@ -1806,11 +1936,7 @@ void LoadParams(void)
         Serial.println("]");
       }
       printf("]\n\n");
-      printf("Madgwick Specifics\n");
-      Serial.print("Beta=");
-      Serial.println(beta);
-      Serial.print("Zeta = ");
-      Serial.println(zeta);
+      printf("Madgwick Specifics: Beta = %f / Zeta = %f\n", beta, zeta);
       SerFlash.close();
     }
   }
@@ -1994,6 +2120,19 @@ void EmptyString(char* TheString, int size)
     TheString[i] = '\0';
 }
 
+void PrintToOSC(char *StringMessage)
+{
+  char LocalString[50];
+  
+  if(WiFi.status() != WL_CONNECTED)
+    return;
+  UdpPacket.beginPacket(DestIP, DestPort);
+  sprintf(LocalString, "/%d/message", ModuleID);
+  StringToOsc(&Message, LocalString, StringMessage);
+  UdpPacket.write((uint8_t*)Message.buf, Message.PacketSize);
+  UdpPacket.endPacket();
+  delay(20);
+}
 
 
 void Calibrate(void)
@@ -2004,13 +2143,17 @@ void Calibrate(void)
 
   // TODO : do a long calibration and an estimate of the gyro drift based 
   // on temperature.
-  // Add a real calibration (elipsoid fitting) of the mag sensors
 
   digitalWrite(POWER_LED, LOW);
-  Serial.print("Entering calibration mode\n");
-  Serial.print("...\nAccelerometer / Gyro Calibration\n");
-  Serial.print("Place Module on a flat surface\n");
-  Serial.print("then press the switch or send the \"next\" command via serial\n");
+  Serial.println(TEXT_CALIBRATION_00);
+  Serial.println(TEXT_CALIBRATION_01);
+  Serial.println(TEXT_CALIBRATION_02);
+  Serial.println(TEXT_CALIBRATION_03);
+  
+  PrintToOSC(TEXT_CALIBRATION_00);
+  PrintToOSC(TEXT_CALIBRATION_01);
+  PrintToOSC(TEXT_CALIBRATION_02);
+  PrintToOSC(TEXT_CALIBRATION_03);
 
   // Wait for the switch to be depressed or the next command to be sent
   // via serial  
@@ -2032,8 +2175,9 @@ void Calibrate(void)
     delay(20);
   }
 
-  Serial.print("*** STARTING CALIBRATION ACC/GYR ***\"\n");	
-
+  Serial.println(TEXT_CALIBRATION_20);	
+  PrintToOSC(TEXT_CALIBRATION_20);
+  
   for(i=0 ; i < 3 ; i++)
   {
     gyro_bias[i] = 0;
@@ -2066,19 +2210,35 @@ void Calibrate(void)
   gyro_bias[1] /= bias_samples; 
   gyro_bias[2] /= bias_samples; 
 
-  printf("*** FOUND Bias acc= %d %d %d\n", accel_bias[0], accel_bias[1], accel_bias[2]);
-  printf("\*** FOUND Bias gyro= %d %d %d\n\n", gyro_bias[0], gyro_bias[1], gyro_bias[2]);
+  sprintf(StringBuffer, "*** FOUND Bias acc= %d %d %d", accel_bias[0], accel_bias[1], accel_bias[2]);
+  printf("%s\n", StringBuffer);
+  PrintToOSC(StringBuffer);
+  sprintf(StringBuffer,"*** FOUND Bias gyro= %d %d %d", gyro_bias[0], gyro_bias[1], gyro_bias[2]);
+  printf("%s\n", StringBuffer);
+  PrintToOSC(StringBuffer);
 
-  Serial.print("Acceleration / Gyroscope calibration finished\n\n");
-  Serial.println("\n\nEntering Calibration of the Magnetometers");
-  Serial.println("Press the switch to start or send the \"next\" command via serial");
+  Serial.println(TEXT_CALIBRATION_21);
+  Serial.println(TEXT_CALIBRATION_22);
+  Serial.println(TEXT_CALIBRATION_03);
+  
+  PrintToOSC(TEXT_CALIBRATION_21);
+  PrintToOSC(TEXT_CALIBRATION_22);
+  PrintToOSC(TEXT_CALIBRATION_03);
+  
+  i = 0;
   while(digitalRead(SWITCH_INPUT) && !NextFlag)
   {
     NextFlag = WaitSerialNext();
     delay(200);
     Serial.print(".");
+    i++;
+    if(i > 30)
+    {
+      Serial.println();
+      i = 0;
+    }
   }
-  Serial.println(" ");
+  Serial.println();
 
   // Wait for the switch to be released
   digitalWrite(POWER_LED, HIGH);
@@ -2090,7 +2250,7 @@ void Calibrate(void)
   boolean QuitLoop = false;
   while(!QuitLoop)
   {
-    // 100 ms sample rate, we don't need much there
+    // 200 ms sample rate, we don't need much there
     if((millis() - ElapsedTime) >= 200)
     {       
       ElapsedTime = millis();
@@ -2107,82 +2267,120 @@ void Calibrate(void)
         switch(CalibrationStage)
         {
         case START :
-          PrintSensorOrientation("X+ 0deg");
+          PrintSensorOrientation(TEXT_X_PLUS_0);
+          PrintToOSC("Place the module in the cardinal positions:");
+          PrintToOSC(TEXT_X_PLUS_0);
           break;
 
           // X axis 
         case X_PLUS_0:
           StoreMag(Xplus0);
-          printf("X+ 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("X+ 180deg");
+          sprintf(StringBuffer,"X+ 0deg : %d %d %d", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_X_PLUS_180);
+          PrintToOSC(TEXT_X_PLUS_180);
           break;
 
         case X_PLUS_180:
           StoreMag(Xplus180);
-          printf("X+ 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("X- 0deg");
+          sprintf(StringBuffer,"X+ 180deg : %d %d %d", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_X_MINUS_0);
+          PrintToOSC(TEXT_X_MINUS_0);
           break;
 
         case X_MINUS_0:
           StoreMag(Xminus0);
-          printf("X- 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("X- 180deg");
+          sprintf(StringBuffer,"X- 0deg : %d %d %d", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_X_MINUS_180);
+          PrintToOSC(TEXT_X_MINUS_180);
           break;
 
         case X_MINUS_180:
           StoreMag(Xminus180);
-          printf("X- 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Y+ 0deg");
+          sprintf(StringBuffer,"X- 180deg : %d %d %d", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Y_PLUS_0);
+          PrintToOSC(TEXT_Y_PLUS_0);
           break;
 
           // Y axis  
         case Y_PLUS_0:
           StoreMag(Yplus0);
-          printf("Y+ 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Y+ 180deg");
+          sprintf(StringBuffer,"Y+ 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Y_PLUS_180);
+          PrintToOSC(TEXT_Y_PLUS_180);
           break;
 
         case Y_PLUS_180:
           StoreMag(Yplus180);
-          printf("Y+ 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Y- 0deg");
+          sprintf(StringBuffer,"Y+ 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Y_MINUS_0);
+          PrintToOSC(TEXT_Y_MINUS_0);
           break;
 
         case Y_MINUS_0:
           StoreMag(Yminus0);
-          printf("Y- 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Y- 180deg");
+          sprintf(StringBuffer,"Y- 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Y_MINUS_180);
+          PrintToOSC(TEXT_Y_MINUS_180);
           break;
 
         case Y_MINUS_180:
           StoreMag(Yminus180);
-          printf("Y- 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Z+ 0deg");
+          sprintf(StringBuffer,"Y- 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Z_PLUS_0);
+          PrintToOSC(TEXT_Z_PLUS_0);
           break;  
 
           // Z axis  
         case Z_PLUS_0:
           StoreMag(Zplus0);
-          printf("Z+ 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Z+ 180deg");
+          sprintf(StringBuffer,"Z+ 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Z_PLUS_180);
+          PrintToOSC(TEXT_Z_PLUS_180);
           break;
 
         case Z_PLUS_180:
           StoreMag(Zplus180);
-          printf("Z+ 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Z- 0deg");
+          sprintf(StringBuffer,"Z+ 180deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Z_MINUS_0);
+          PrintToOSC(TEXT_Z_MINUS_0);
           break;
 
         case Z_MINUS_0:
           StoreMag(Zminus0);
-          printf("Z- 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          PrintSensorOrientation("Z- 180deg");
+          sprintf(StringBuffer,"Z- 0deg : %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          PrintSensorOrientation(TEXT_Z_MINUS_180);
+          PrintToOSC(TEXT_Z_MINUS_180);
           break;
 
         case Z_MINUS_180:
           StoreMag(Zminus180);
-          printf("Z- 180deg: %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
-          Serial.println("Calibration Sequence finished");
+          sprintf(StringBuffer,"Z- 180deg: %d %d %d\n", MagnetometerX.Value, MagnetometerY.Value, MagnetometerZ.Value);
+          printf("%s\n");
+          PrintToOSC(StringBuffer);
+          Serial.println(TEXT_CALIB_END);
+          PrintToOSC(TEXT_CALIB_END);
           break; 
 
         default:
@@ -2192,7 +2390,9 @@ void Calibrate(void)
         CalibrationStage++;
         if(CalibrationStage >= END)
         {
-          Serial.println("Computing Matrix and Bias");
+          sprintf(StringBuffer,"Computing Matrix and Bias");
+          Serial.println(StringBuffer);
+          PrintToOSC(StringBuffer);
           CalculateTransformationMatrix();
 
           //Display results
@@ -2212,11 +2412,18 @@ void Calibrate(void)
           }
           printf("]\n\n");
           // Bias
-          printf("Bias\n");
-          printf("mag_bias[3] = {%d, %d, %d}\n", mag_bias[0], mag_bias[1], mag_bias[2]);            
+          
+          sprintf(StringBuffer,"Bias");
+          Serial.println(StringBuffer);
+          PrintToOSC(StringBuffer);
+          sprintf(StringBuffer, "mag_bias[3] = {%d, %d, %d}\n", mag_bias[0], mag_bias[1], mag_bias[2]);
+          PrintToOSC(StringBuffer);        
           digitalWrite(POWER_LED, HIGH);
-          SaveFlashPrefs();	
-          Serial.println("\n\n******* CALIBRATION FINISHED - PREFS SAVED - PLEASE REBOOT *********");
+          SaveFlashPrefs();
+          sprintf(StringBuffer,"** CALIBRATION FINISHED - PREFS SAVED - PLEASE REBOOT **");
+          printf("\n%s\n", StringBuffer);
+          PrintToOSC(StringBuffer);
+          
           QuitLoop = true;
         }
       }
@@ -2592,9 +2799,44 @@ boolean WaitSerialNext(void)
     if(!strncmp("next", StringBuffer, 4))
       return(true);
   }
+  
+  // Also check the next command via UDP / OSC to have a fully wireless system
+  if(WiFi.status() == WL_CONNECTED)
+  {
+    int packetSize = ConfigPacket.parsePacket();
+    if (packetSize)
+    {
+        // Debug Info
+         //Serial.print("Received packet of size ");
+         //Serial.println(packetSize);
+         //Serial.print("From ");
+         //IPAddress remoteIp = ConfigPacket.remoteIP();
+         //Serial.print(remoteIp);
+         //Serial.print(", port ");
+         //Serial.println(ConfigPacket.remotePort());
 
-  // Add OSC input there to allow remote calibration without USB
-
+        // read the packet into packetBufffer
+        int Index = 0;
+        int len = ConfigPacket.read(packetBuffer, 255);
+        if (len > 0) packetBuffer[len] = 0;          // Add a terminator in the buffer
+        //Serial.println("Contents:");
+        //Serial.println(packetBuffer);
+        //Serial.println("Packet Len:");
+        //Serial.println(len);
+        // Actual parsing
+        // Checks that's for the proper ID / module
+        sprintf(StringBuffer, "/%u/\0",ModuleID);
+        if(!strncmp(packetBuffer, StringBuffer, strlen(StringBuffer)))
+        {  // that's for us
+          char *pUDP = packetBuffer + strlen(StringBuffer);
+          if(!strncmp(pUDP, "next", 4))
+          {
+            //Serial.println("received UDP next");
+            return(true);
+          }
+        }
+    }
+  }
   return(false);
 }	
 

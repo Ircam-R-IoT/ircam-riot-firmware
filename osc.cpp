@@ -31,7 +31,7 @@ void PrepareOSC(OscBuffer *TheBuffer, char *OscAddress, char TypeTag, uint8_t Sl
     pBuf++;
   }
   
-  // 4 byte padding / suffing
+  // 4 byte padding / stuffing
   while(size%4)
   {
     *pBuf = '\0';
@@ -75,11 +75,90 @@ void PrepareOSC(OscBuffer *TheBuffer, char *OscAddress, char TypeTag, uint8_t Sl
   // Dumb check as at that point it's supposed to be 4-byte aligned
   while(size%4)
   {
+    *pBuf = '\0';
     size++;
     pBuf++;
   }
   TheBuffer->PacketSize = size;
   *(pBuf+1) = '\0';
+  //Serial.print("OSC packet size = ");
+  //Serial.println(size);
+}
+
+void StringToOsc(OscBuffer *TheBuffer, char *OscAddress, char *StringMessage)
+{
+  int i;
+  int size = 0;
+  char *pBuf;
+	
+  pBuf = TheBuffer->buf;
+  size = strlen(OscAddress);
+  strcpy(pBuf, OscAddress);
+  pBuf += size;
+ 
+  // We can't stop on an aligned %4, as we need at least one zero terminator in the address
+  if(!(size%4))
+  {
+    *pBuf = '\0';
+    size++;
+    pBuf++;
+  }
+  
+  // 4 byte padding / stuffing
+  while(size%4)
+  {
+    *pBuf = '\0';
+    size++;
+    pBuf++;
+  }	
+  // adds the comma char (separator for typetags)
+  *pBuf = ',';
+  pBuf++;
+  size++;
+  // adds the string type tags
+  *pBuf = 's';
+  pBuf++;
+  size++;
+  
+  // We can't stop on an aligned %4, as we need at least one zero terminator in the address
+  if(!(size%4))
+  {
+    *pBuf = '\0';
+    size++;
+    pBuf++;
+  }	
+  // 4 byte padding / stuffing
+  while(size%4)
+  {
+    *pBuf = '\0';
+    pBuf++;
+    size++;
+  }
+
+  // Stores where the actual data start
+  TheBuffer->pData = pBuf;
+  
+  // Adds size of data (string length)
+  strcpy(pBuf, StringMessage);
+  size += strlen(StringMessage);
+  pBuf += strlen(StringMessage);
+
+  // There is a mandatory string terminator that isn't inserted by the
+  // string copy above (as it stops without including it)	
+  *pBuf = '\0';
+  pBuf++;
+  size++;
+
+  // Eventually pads the string to %4
+  while(size%4)
+  {
+    *pBuf = '\0';
+    size++;
+    pBuf++;
+  }
+  
+  TheBuffer->PacketSize = size;
+  *pBuf = '\0';
   //Serial.print("OSC packet size = ");
   //Serial.println(size);
 }

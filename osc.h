@@ -10,8 +10,8 @@ typedef struct s_OSC {
 } OscBuffer;
 
 
-
 void PrepareOSC(OscBuffer *TheBuffer, char *OscAddress, char TypeTag, uint8_t Slots);
+void StringToOsc(OscBuffer *TheBuffer, char *OscAddress, char *StringMessage);
 void ShortToBigEndian(char *Dest, short int Val);
 void WordToBigEndian(char *Dest, Word TheWord);
 void FloatToBigEndian(char *Dest, float *TheFloat);

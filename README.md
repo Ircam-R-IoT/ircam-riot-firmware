@@ -1,4 +1,4 @@
-# R-IoT firmware v1.5
+# R-IoT firmware v1.6
 
 #### quick start
 
