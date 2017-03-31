@@ -1,4 +1,7 @@
 /* R-IoT :
+ 
+ Current firmware version : 1.5
+
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
  
@@ -8,7 +11,7 @@
  Battery reading in volt = [analogRead() * 1.7] / (4096 * 0.364)
  or, simplified to 
  Battery reading in volt = analogRead() / 877.
- 
+  
  Rev History :
  
  1.5 : adding a AP style connection to allow streaming to multiple computers / devices
