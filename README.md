@@ -1,4 +1,10 @@
-# R-IoT firmware v1.7
+# R-IoT firmware v1.8
+
+#### note
+
+This is a beta, latest stable release is v1.7.  
+Use this beta version for compatibility with [MuBu](http://forumnet.ircam.fr/product/mubu-en/) v1.9.1.bis and later.  
+You can still use v1.7 with MuBu v1.9.1 and earlier.
 
 #### quick start
 

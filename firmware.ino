@@ -1,7 +1,7 @@
 /* R-IoT :
 
- Current version : 1.7
-  
+ Current version : 1.8
+
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
  
@@ -101,7 +101,7 @@ unsigned long ElapsedTime2 = 0;
 
 ////////////////////////////////////////////////////////////
 // Sensor storage
-short unsigned int BatteryVoltage = 0, SwitchState;
+short unsigned int BatteryVoltage = 0, SwitchState, ActualSwitchState;
 Word AccelerationX, AccelerationY, AccelerationZ;
 Word GyroscopeX, GyroscopeY, GyroscopeZ;
 Word MagnetometerX, MagnetometerY, MagnetometerZ;
@@ -112,8 +112,8 @@ byte CommunicationMode = SPI_MODE;
 short unsigned int AnalogInput1, AnalogInput2;
 
 // Defines whether you want the "raw" value with the stored offset or not
-byte SendCalibrated = true;
-//byte SendCalibrated = false;
+//byte SendCalibrated = true;
+byte SendCalibrated = false;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Absolute angle (madgwick)
@@ -130,8 +130,8 @@ byte SendCalibrated = true;
 // Beta is called the rate of convergence of the filter. Higher value lead to a noisy output but fast response
 // If beta = 0.0 => uses gyro only. A very high beta like 2.5 uses almost no gyro and only accel + magneto.
 
-#define BETA_DEFAULT 0.4   // Much faster - noisier
-#define BETA_MAX     2.0
+#define BETA_DEFAULT 0.4f   // Much faster - noisier
+#define BETA_MAX     2.0f
 //#define beta 0.041f    // 10 seconds or more to have the quaternion converge to the right orientation - super smooth
 
 float beta = BETA_DEFAULT;
@@ -142,7 +142,6 @@ float acc_lp_alpha = 0.01;  // 10 ms
 int gyroOffsetAutocalTime = 5000; //ms = 1000 samples @5ms
 long gyroOffsetAutocalThreshold = 100; //LSB
 long gyroOffsetAutocalCounter; //internal
-//boolean gyroOffsetAutocalOn = true;
 boolean gyroOffsetAutocalOn = false;
 boolean gyroOffsetCalDone = false;
 long gyroOffsetCalElapsed = 0;
@@ -340,12 +339,17 @@ void setup() {
     ConfigPacket.begin(DEFAULT_UDP_SERVICE_PORT);
 
     // Prepare the OSC message structure
-    sprintf(StringBuffer, "/%u/raw\0",ModuleID);
+    /*sprintf(StringBuffer, "/%u/raw\0",ModuleID);
     PrepareOSC(&RawSensors, StringBuffer, 'i', 12);    // 11 integers + temperature
     sprintf(StringBuffer, "/%u/quat\0",ModuleID);
     PrepareOSC(&Quaternions, StringBuffer, 'f', 4);    // 4 floats
     sprintf(StringBuffer, "/%u/euler\0",ModuleID);
-    PrepareOSC(&EulerAngles, StringBuffer, 'f', 4);    // 4 floats (yaw, pitch, roll, heading)
+    PrepareOSC(&EulerAngles, StringBuffer, 'f', 4);    // 4 floats (yaw, pitch, roll, heading)*/
+    
+    // Now we send all data at once in a single message with only floats
+    sprintf(StringBuffer, "/%u/raw\0",ModuleID);
+    PrepareOSC(&RawSensors, StringBuffer, 'f', 20);    // All float
+    
     sprintf(StringBuffer, "/%u/analog\0",ModuleID);
     PrepareOSC(&AnalogInputs, StringBuffer, 'i', 2);    // 2 int    
 
@@ -534,6 +538,7 @@ void loop() {
       // read the battery status
       BatteryVoltage = analogRead(BATT_MONITORING);
       SwitchState = digitalRead(SWITCH_INPUT);
+      ActualSwitchState = !SwitchState;
       
       // Comment those 2 if you don't need the analog inputs to be exported by OSC
       AnalogInput1 = analogRead(ANALOG_INPUT1);
@@ -568,18 +573,7 @@ void loop() {
       
       if(!gyroOffsetCalDone && gyroOffsetAutocalOn)
       {
-        gyroOffsetCalibration();      
-        magOffsetAutocalMax[0] = max(magOffsetAutocalMax[0], MagnetometerX.Value);
-        magOffsetAutocalMax[1] = max(magOffsetAutocalMax[1], MagnetometerY.Value);
-        magOffsetAutocalMax[2] = max(magOffsetAutocalMax[2], MagnetometerZ.Value);
-        magOffsetAutocalMin[0] = min(magOffsetAutocalMin[0], MagnetometerX.Value);
-        magOffsetAutocalMin[1] = min(magOffsetAutocalMin[1], MagnetometerY.Value);
-        magOffsetAutocalMin[2] = min(magOffsetAutocalMin[2], MagnetometerZ.Value);
-        for(int i = 0 ; i < 3 ; i++)
-        {
-           mag_bias[i] = (magOffsetAutocalMax[i] + magOffsetAutocalMin[i]) / 2;
-           mbias[i] = mRes * (float)mag_bias[i];
-        }
+        gyroOffsetCalibration();
       }
       
       g_x = (gRes * (float)GyroscopeX.Value) - gbias[0];   // Convert to degrees per seconds, remove gyro biases
@@ -635,8 +629,50 @@ void loop() {
        Serial.println(q2);
        Serial.println(q3);
        Serial.println(q4);*/
+       
+       // Update sensors data in the main OSC message
+      char *pData = RawSensors.pData;
+     
+      float TempFloat;
+      TempFloat = (float)BatteryVoltage;
+      FloatToBigEndian(pData, &TempFloat);
+      pData += sizeof(float);
+      TempFloat = (float)ActualSwitchState;
+      FloatToBigEndian(pData, &TempFloat);
+      pData += sizeof(float);      
+      FloatToBigEndian(pData, &a_x);
+      pData += sizeof(float);
+      FloatToBigEndian(pData, &a_y);
+      pData += sizeof(float);
+      FloatToBigEndian(pData, &a_z);
+      pData += sizeof(float);
+      
+      // Rescaling to deg/s to have a more human readable value
+      // and decent numbers similar to accell
+      float g_x_scaled, g_y_scaled, g_z_scaled;
+      g_x_scaled = g_x / 1000.;  // Sending °/s
+      g_y_scaled = g_y / 1000.;  // Sending °/s
+      g_z_scaled = g_z / 1000.;  // Sending °/s
+      
+      FloatToBigEndian(pData, &g_x_scaled);
+      pData += sizeof(float);
+      FloatToBigEndian(pData, &g_y_scaled);
+      pData += sizeof(float);
+      FloatToBigEndian(pData, &g_z_scaled);
+      pData += sizeof(float);
+       
+      FloatToBigEndian(pData, &m_x);
+      pData += sizeof(float);
+      FloatToBigEndian(pData, &m_y);
+      pData += sizeof(float);
+      FloatToBigEndian(pData, &m_z);
+      pData += sizeof(float);
+      // Temperature
+      TempFloat = (float)Temperature.Value;
+      FloatToBigEndian(pData, &TempFloat);
+      pData += sizeof(float);
 
-      char *pData = Quaternions.pData;
+      // Quaternions
       FloatToBigEndian(pData, &q1);
       pData += sizeof(float);
       FloatToBigEndian(pData, &q2);
@@ -646,7 +682,7 @@ void loop() {
       FloatToBigEndian(pData, &q4);
       pData += sizeof(float);
 
-      pData = EulerAngles.pData;
+      // Euler Angles + Heading
       FloatToBigEndian(pData, &yaw);
       pData += sizeof(float);
       FloatToBigEndian(pData, &pitch);
@@ -654,48 +690,7 @@ void loop() {
       FloatToBigEndian(pData, &roll);
       pData += sizeof(float);
       FloatToBigEndian(pData, &heading);
-
-      // Update sensors data in the main OSC message
-      pData = RawSensors.pData;
-
-      if(SendCalibrated)
-      {
-        AccelerationX.Value -= accel_bias[0];
-        AccelerationY.Value -= accel_bias[1];
-        AccelerationZ.Value -= accel_bias[2];
-        GyroscopeX.Value -= gyro_bias[0];
-        GyroscopeY.Value -= gyro_bias[1];
-        GyroscopeZ.Value -= gyro_bias[2];
-        MagnetometerX.Value -= mag_bias[0];
-        MagnetometerY.Value -= mag_bias[1];
-        MagnetometerZ.Value -= mag_bias[2];
-      }
-
-      ShortToBigEndian(pData, BatteryVoltage);
-      pData += sizeof(int);
-      ShortToBigEndian(pData, SwitchState);
-      pData += sizeof(int);      
-      WordToBigEndian(pData, AccelerationX);
-      pData += sizeof(int);
-      WordToBigEndian(pData, AccelerationY);
-      pData += sizeof(int);
-      WordToBigEndian(pData, AccelerationZ);
-      pData += sizeof(int);
-      WordToBigEndian(pData, GyroscopeX);
-      pData += sizeof(int);
-      WordToBigEndian(pData, GyroscopeY);
-      pData += sizeof(int);
-      WordToBigEndian(pData, GyroscopeZ);
-      pData += sizeof(int);
-      WordToBigEndian(pData, MagnetometerX);
-      pData += sizeof(int);
-      WordToBigEndian(pData, MagnetometerY);
-      pData += sizeof(int);
-      WordToBigEndian(pData, MagnetometerZ);
-      // Temperature
-      pData += sizeof(int);
-      WordToBigEndian(pData, Temperature);
-      
+ 
          // Optional
       // Use if you want to export analog inputs
       pData = AnalogInputs.pData;
@@ -724,32 +719,24 @@ void loop() {
           //Serial.println(WiFi.deviceMacAddress(i));
           UdpPacket.beginPacket(DestIP, DestPort);
           
-          UdpPacket.write((uint8_t*)AnalogInputs.buf, AnalogInputs.PacketSize);
-          UdpPacket.endPacket();
-
           UdpPacket.write((uint8_t*)RawSensors.buf, RawSensors.PacketSize);
           UdpPacket.endPacket();
-          UdpPacket.write((uint8_t*)Quaternions.buf, Quaternions.PacketSize);
-          UdpPacket.endPacket();
+          
           // Optional
-          UdpPacket.write((uint8_t*)EulerAngles.buf, EulerAngles.PacketSize);
-          UdpPacket.endPacket();
+          //UdpPacket.write((uint8_t*)AnalogInputs.buf, AnalogInputs.PacketSize);
+          //UdpPacket.endPacket();
 
           digitalWrite(POWER_LED, LOW);
         }
       }
       else
       {
-        UdpPacket.write((uint8_t*)AnalogInputs.buf, AnalogInputs.PacketSize);
-        UdpPacket.endPacket();
+        // Optional
+        //UdpPacket.write((uint8_t*)AnalogInputs.buf, AnalogInputs.PacketSize);
+        //UdpPacket.endPacket();
 
         UdpPacket.write((uint8_t*)RawSensors.buf, RawSensors.PacketSize);
         UdpPacket.endPacket();
-        UdpPacket.write((uint8_t*)Quaternions.buf, Quaternions.PacketSize);
-        UdpPacket.endPacket();
-        // Optional
-        UdpPacket.write((uint8_t*)EulerAngles.buf, EulerAngles.PacketSize);
-        UdpPacket.endPacket();        
         digitalWrite(POWER_LED, LOW);
        }
     }
@@ -2151,7 +2138,8 @@ void LoadParams(void)
         Serial.println("]");
       }
       printf("]\n\n");
-      printf("Madgwick Specifics: Beta = %f\n", beta);
+      Serial.print("Madgwick Specifics: Beta =");
+      Serial.println(beta);
       SerFlash.close();
     }
   }
