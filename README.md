@@ -8,7 +8,7 @@ You can still use v1.7 with MuBu v1.9.1 and earlier.
 
 #### quick start
 
-* Download and install Energia version 17 or lower from [energia.nu/download/](http://energia.nu/download/#previousreleases).
+* Download and install Energia version 17 from [energia.nu/download/](http://energia.nu/download/#previousreleases).
 * Modify the `cc3200.ld` file and change the `HEAP_SIZE` value to `0x00008000` :
 	* on Windows this file is located into `C:\Program Files(x86)\energia-0101E0017\hardware\cc3200\cores\cc3200`
 	* on Mac OS, right-click on the Energia application and select "show package contents", then go to `Contents/Resources/Java/hardware/cc3200/cores/cc3200`
@@ -21,4 +21,4 @@ For more information, please visit [ismm.ircam.fr/riot/](http://ismm.ircam.fr/ri
 
 #### credits
 
-This project has been developed by the ISMM team at IRCAM-Centre Pompidou within the CoSiMa project (funded by ANR) and the MusicBricks project funded by the European Union's Horizon 2020 research and innovation programme.
+This project has been developed by the ISMM team at IRCAM-Centre Pompidou within the CoSiMa project (funded by ANR), the MusicBricks project funded by the European Union's Horizon 2020 research and innovation programme, and the RAPID-MIX project (H2020-ICT-2014-1 Project ID 644862).
