@@ -1,4 +1,7 @@
 /* R-IoT :
+
+ Current version : 1.8 beta
+
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
  
