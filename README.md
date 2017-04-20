@@ -2,8 +2,7 @@
 
 #### note
 
-This is a beta, latest stable release is v1.7.  
-Use this beta version for compatibility with [MuBu](http://forumnet.ircam.fr/product/mubu-en/) v1.9.1.bis and later.  
+Use this version for compatibility with [MuBu](http://forumnet.ircam.fr/product/mubu-en/) v1.9.2 and later.  
 You can still use v1.7 with MuBu v1.9.1 and earlier.
 
 #### quick start
