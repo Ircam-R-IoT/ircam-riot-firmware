@@ -1,4 +1,9 @@
-# R-IoT firmware v1.7
+# R-IoT firmware v1.8
+
+#### note
+
+Use this version for compatibility with [MuBu](http://forumnet.ircam.fr/product/mubu-en/) v1.9.2 and later.  
+You can still use v1.7 with MuBu v1.9.1 and earlier.
 
 #### quick start
 
