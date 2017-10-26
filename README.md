@@ -12,7 +12,10 @@ You can still use v1.7 with MuBu v1.9.1 and earlier.
 	* on Windows this file is located into `C:\Program Files(x86)\energia-0101E0017\hardware\cc3200\cores\cc3200`
 	* on Mac OS, right-click on the Energia application and select "show package contents", then go to `Contents/Resources/Java/hardware/cc3200/cores/cc3200`
 * Get the SLFS library from [github.com/Ircam-R-IoT/SLFS](https://github.com/Ircam-R-IoT/SLFS) and drop it into `Documents/Energia/libraries`.
-* Open the firmware.ino file with Energia and hit the "Verify" button in the upper left corner. If it builds, you're ready to upload it to the R-IoT board.
+* Open the `firmware.ino` file with Energia.
+* Select in menu `Tools > Boards > LauchPad W/ cc3200 (80MHz)`
+* Hit the "Verify" button in the upper left corner. If it builds, you're ready to upload it to the R-IoT board.
+* Choose the serial port starting with `tty`
 
 #### going further
 
