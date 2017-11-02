@@ -1,6 +1,6 @@
 /* R-IoT :
 
- Current version : 1.8
+ Current version : 1.8.1
 
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
@@ -14,6 +14,8 @@
  
  Rev History :
  
+ 1.8 : GPIO switch inverted logic and single OSC message to fix max/MSP udpreceive object FIFO issue
+
  1.7 : corrected yaw drift and error + auto calibration for gyro every 5sec if no movement / stable + improved mag calibration
   
  1.6 : added I2C support of the LMS9DS0 for external sensors
@@ -1610,7 +1612,7 @@ void CalibrateAccGyroMag(void)
     // update min, max, sum and counter
     gyroOffsetAutocalMax[0] = max(gyroOffsetAutocalMax[0], GyroscopeX.Value);
     gyroOffsetAutocalMax[1] = max(gyroOffsetAutocalMax[1], GyroscopeY.Value);
-    gyroOffsetAutocalMax[2] = max(gyroOffsetAutocalMax[2], GyroscopeY.Value);
+    gyroOffsetAutocalMax[2] = max(gyroOffsetAutocalMax[2], GyroscopeZ.Value);
     
     gyroOffsetAutocalMin[0] = min(gyroOffsetAutocalMin[0], GyroscopeX.Value);
     gyroOffsetAutocalMin[1] = min(gyroOffsetAutocalMin[1], GyroscopeY.Value);
