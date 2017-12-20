@@ -1,6 +1,6 @@
 /* R-IoT :
 
- Current version : 1.8.1
+ Current version : 1.8.2
 
  Texas Instrument CC3200 Internet of Things / Sensor hub / Dev Platform
  80 MHz 32 Bit ARM MCU + Wifi stack / modem
@@ -13,7 +13,9 @@
  Battery reading in volt = analogRead() / 877.
  
  Rev History :
- 
+
+ 1.8.2 : button may only trigger calibration for 10 seconds after start-up (to allow for longer press)
+ 1.8.1 : calibration did not start
  1.8 : GPIO switch inverted logic and single OSC message to fix max/MSP udpreceive object FIFO issue
 
  1.7 : corrected yaw drift and error + auto calibration for gyro every 5sec if no movement / stable + improved mag calibration
@@ -86,7 +88,8 @@ int PacketStatus;
 boolean ConfigurationMode = false;
 boolean AcceptOSC = true;
 byte PageToDisplay = CONFIG_WEB_PAGE;
-unsigned int ConfigModeCounter = 0;
+unsigned int ConfigModePressCounter = 0;
+unsigned int ConfigModeAllowCounter = 1000; // allow config only shortly after start-up
 int TempInt = 0;
 
 char packetBuffer[255]; //buffer to hold incoming packet
@@ -546,17 +549,26 @@ void loop() {
       AnalogInput1 = analogRead(ANALOG_INPUT1);
       AnalogInput2 = analogRead(ANALOG_INPUT2);
 
-      if(!SwitchState)
-      { 
-        ConfigModeCounter++;
-        if(ConfigModeCounter > 600)
+      // Allow configuration mode only shortly after start-up
+      if(ConfigModeAllowCounter > 0)
+      {
+        --ConfigModeAllowCounter;
+        if(!SwitchState)
         {
-          ConfigModeCounter = 0;
-          CalibrateAccGyroMag();
+          ConfigModePressCounter++;
+          if(ConfigModePressCounter > 600)
+          {
+            ConfigModeAllowCounter = 0;
+            ConfigModePressCounter = 0;
+            CalibrateAccGyroMag();
+          }
+        }
+        else
+        {
+          // end of initial period that allows for calibration
+          ConfigModePressCounter = 0;
         }
       }
-      else
-        ConfigModeCounter = 0;
 
       // Debug
       //Serial.print("Battery voltage=");
